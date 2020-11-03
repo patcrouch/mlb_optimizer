@@ -7,19 +7,20 @@ class Optimizer:
         #player_master not to be manipulated
         self.player_master = self.initialize_df(file_path)
         #players is changed in team filtering
-        self.players = self.player_master
+        self.players = self.player_master.copy()
         self.positions = self.set_indicators('position')
         self.teams = self.set_indicators('team')
-        self.opp_skaters = self.set_opp_skaters()
+        self.opp_batters = self.set_opp_batters()
         self.num_lineups = num_lineups
         self.n_players = len(self.players.index)
-        self.p_vars = []
+        self.p_vars = {}
         self.t_vars = []
         self.lineups = {}
         self.excl_teams = []
         self.excl_players = []
         self.lock_players = []
-        self.percentages = {}
+        self.percentages = pd.DataFrame()
+
         #keeps track of optimal status of lineups
         #0 is default, 1 means all linueps optimal, -1 means some lineups infeasible
         self.optimal_status = 0
@@ -29,13 +30,14 @@ class Optimizer:
 
     #prepares df for program
     def initialize_df(self, file_path):
-        df = pd.read_csv(file_path)
-        df = df.sort_values(by=['last_name', 'first_name'])
+        df = pd.read_csv(file_path,index_col=False)
+        df['name'] = df['first_name']+' '+df['last_name']
+        df['value'] = round(df['ppg_projection']/df['salary']*1000, 2)
+        df.loc[(df['position']=='C')|(df['position']=='1B'),'position']='C-1B'
+        df = df.sort_values('last_name')
+        df['name'] = df['name'].apply(lambda name: f"{name[:16]:>16}")
         df = df.reset_index(drop=True)
         df['player_id'] = df.index
-        df.insert(0, 'full_name', df['first_name'] + ' ' + df['last_name'])
-        df['full_name'] = df['full_name'].apply(lambda name: f"{name[:19]:>19}")
-        df['value'] = round(df['ppg_projection']/df['salary']*1000, 2)
         return df
 
     #sets indicator dictionary given column of dataframe
@@ -45,28 +47,27 @@ class Optimizer:
             ind = self.players[col] == key
             ind = ind.astype(int)
             d[key] = ind
-        return d
+        return pd.DataFrame(d)
 
-    #for each goalie, returns indicators for skaters opposing the goalie
-    #used in goalie constraint
-    def set_opp_skaters(self):
-        opp = {i:[] for i in self.players.index if self.players.loc[i, 'position'] == 'G'}
-        for goalie in opp:
-            opp_skaters = (self.players['team']==self.players.loc[goalie, 'opp'])
-            opp[goalie] = opp_skaters.astype(int)
-        return opp
+    #for each pitcher, returns indicators for batters opposing the pitcher
+    #used in pitcher constraint
+    def set_opp_batters(self):
+        opp = {i:[] for i in self.players.index if self.players.loc[i, 'position'] == 'P'}
+        for pitcher in opp:
+            opp_batters = (self.players['team']==self.players.loc[pitcher, 'opp'])
+            opp[pitcher] = opp_batters.astype(int)
+        return pd.DataFrame(opp)
 
-
-    #filters excluded teams from player df
+    #filters excluded teams and from player df
     def filter_players(self):
         #filters out excluded teams and players
-        self.players = self.player_master
+        self.players = self.player_master.copy()
         self.players = self.players.loc[~self.players['team'].isin(self.excl_teams)]
         self.players = self.players.loc[~self.players['player_id'].isin(self.excl_players)]
 
         #resets indicators, index, and number of players
-        self.players = self.players.reset_index(drop=True)
-        self.opp_skaters = self.set_opp_skaters()
+        #self.players = self.players.reset_index(drop=True)
+        self.opp_batters = self.set_opp_batters()
         self.positions = self.set_indicators('position')
         self.teams = self.set_indicators('team')
         self.n_players = len(self.players.index)
@@ -77,43 +78,50 @@ class Optimizer:
         prob = pulp.LpProblem('Opti', pulp.LpMaximize)
 
         #adds decision variables
-        self.p_vars = [pulp.LpVariable(str(player_id), cat='Binary') for player_id in range(self.n_players)]
+        self.p_vars = {player_id:pulp.LpVariable(str(player_id), cat='Binary') for player_id in self.players['player_id']}
         self.t_vars = [pulp.LpVariable(str(team), cat='Binary') for team in self.teams]   #to be used for team constraints only, not objective
 
         #adds objective function
-        prob += (pulp.lpSum(self.players.loc[i, 'ppg_projection']*self.p_vars[i] for i in range(self.n_players)))
+        prob += (pulp.lpSum(self.players.loc[p_id, 'ppg_projection']*self.p_vars[p_id] for p_id in self.players['player_id']))
         
         #add player number constraints
-        prob += (pulp.lpSum(self.p_vars[i] for i in range(self.n_players)) == 9)
+        prob += (pulp.lpSum(self.p_vars[p_id] for p_id in self.players['player_id']) == 9)
 
         #add position constraints
-        prob += (pulp.lpSum(self.positions['C'][i]*self.p_vars[i] for i in range(self.n_players)) == 2)
-        prob += (pulp.lpSum(self.positions['W'][i]*self.p_vars[i] for i in range(self.n_players)) == 4)
-        prob += (pulp.lpSum(self.positions['D'][i]*self.p_vars[i] for i in range(self.n_players)) == 2)
-        prob += (pulp.lpSum(self.positions['G'][i]*self.p_vars[i] for i in range(self.n_players)) == 1)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'C-1B']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'C-1B']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'2B']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'2B']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'3B']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'3B']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'SS']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'SS']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'OF']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 4)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'OF']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 3)
+        prob += (pulp.lpSum(self.positions.loc[p_id,'P']*self.p_vars[p_id] for p_id in self.players['player_id']) == 1)
 
-        for team in self.teams:
+        for team in self.teams.columns.values:
             #adds number of players per team constraint
-            prob += (pulp.lpSum(self.teams[team][i]*self.p_vars[i] for i in range(self.n_players)) <= 4)
+            prob += (pulp.lpSum(self.teams.loc[p_id,team]*self.p_vars[p_id] for p_id in self.players['player_id']) <= 4)
             
             #contrains team variable to be 0 when no players from a team are added, 1 otherwise
-            prob += (pulp.lpSum(self.teams[team][i]*self.p_vars[i] for i in range(self.n_players)) >= 
+            prob += (pulp.lpSum(self.teams.loc[p_id,team]*self.p_vars[p_id] for p_id in self.players['player_id']) >= 
                     self.t_vars[list(self.teams).index(team)])
 
         #adds number of total teams constraint
         prob += (pulp.lpSum(team for team in self.t_vars) >= 3)
 
-        #adds constraint where no skaters can face goalie
-        for goalie in self.opp_skaters:
-            prob += (6*self.p_vars[goalie] +
-                pulp.lpSum(self.opp_skaters[goalie][j]*self.p_vars[j] for j in range(self.n_players)) <= 6)
+        #adds constraint where no batters can face pitcher
+        for pitcher in self.opp_batters.columns.values:
+            prob += (6*self.p_vars[pitcher] +
+                pulp.lpSum(self.opp_batters.loc[p_id,pitcher]*self.p_vars[p_id] for p_id in self.players['player_id']) <= 6)
 
         #adds locked players constraints
         for player in self.lock_players:
             prob += (self.p_vars[player] == 1)
 
         #add salary constraint
-        prob += (pulp.lpSum(self.players.loc[i, 'salary']*self.p_vars[i] for i in range(self.n_players)) <= 55000)
+        prob += (pulp.lpSum(self.players.loc[p_id, 'salary']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 35000)
 
         #creates list with optimal solutions
         self.lineups = self.load_lineups(prob)
@@ -128,19 +136,19 @@ class Optimizer:
         if prob.status != 1:
             self.optimal_status = -1
             return {}
-        line_dict = {0: self.convert_lineups(self.p_vars)}
+        line_dict = {0: self.convert_lineups(self.p_vars.values())}
         prob_dict = {0: prob}
         self.lineups_created = 1
 
         #loop copies problem from previous lineup and adds a constraint forcing a new lineup
         for i in range(1, self.num_lineups):
             prob_dict[i] = prob_dict[i-1].copy()
-            prob_dict[i] += (pulp.lpSum(self.p_vars[i] for i in range(self.n_players) if pulp.value(self.p_vars[i])==1) <= 8)
+            prob_dict[i] += (pulp.lpSum(self.p_vars[p_id] for p_id in self.players['player_id'] if pulp.value(self.p_vars[p_id])==1) <= 8)
             prob_dict[i].solve()
             if prob_dict[i].status != 1:
                 self.optimal_status = -1
                 return line_dict
-            line_dict[i] = self.convert_lineups(self.p_vars)
+            line_dict[i] = self.convert_lineups(self.p_vars.values())
             self.lineups_created += 1
 
         #if all lineups are created, optimal status is 1 and line_dict returned
@@ -155,10 +163,16 @@ class Optimizer:
         l = self.players[p]
 
         #creates new dataframe to simplify lineup for printing
-        player_df = l.filter(['position', 'full_name', 'team', 'salary', 'ppg_projection', 'value', 'player_id'])
+        player_df = l.filter(['position', 'name', 'team', 'salary', 'ppg_projection', 'value', 'player_id'])
+
+        #renames extra position player as UTIL
+        pos_key = pd.Series({'P':1,'C-1B':1,'2B':1,'SS':1,'3B':1,'OF':3},name='position').sort_index()
+        pos_counts = player_df['position'].value_counts(sort=False).sort_index()
+        util = pos_key[pos_key != pos_counts].index[0]
+        player_df.loc[(player_df['position']==util) & ((player_df['position']==util).cumsum()<=1),'position'] = 'UTIL'
 
         #orders lineup as seen in game
-        player_df['position'] = pd.Categorical(player_df['position'], ['C', 'W', 'D', 'G'])
+        player_df['position'] = pd.Categorical(player_df['position'], ['P','C-1B','2B','SS','3B','OF','UTIL'])
         player_df = player_df.sort_values(by='position')
 
         #resets index to original player id
@@ -179,12 +193,12 @@ class Optimizer:
             return
 
         #puts percentages of each player into series indexed by player_id
-        p = all_lineups.groupby('player_id').count().full_name
+        p = all_lineups.groupby('player_id').count().name
         p = p.apply(lambda x: round(x/len(self.lineups)*100, 1))
 
         #creates and orders percentages df
         percentages = self.player_master.filter(p.index, axis = 0)
-        percentages = percentages.filter(['position', 'full_name', 'team', 'salary', 'ppg_projection' ])
+        percentages = percentages.filter(['position', 'name', 'team', 'salary', 'ppg_projection'])
         percentages.insert(2, 'percentages', p)
         percentages = percentages.sort_values(by='percentages', ascending=False)
 
