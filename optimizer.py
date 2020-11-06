@@ -73,61 +73,67 @@ class Optimizer:
         self.n_players = len(self.players.index)
 
     def optimize(self):
-        self.lineups_created = 0
-        self.filter_players()
-        prob = pulp.LpProblem('Opti', pulp.LpMaximize)
-
-        #adds decision variables
-        self.p_vars = {player_id:pulp.LpVariable(str(player_id), cat='Binary') for player_id in self.players['player_id']}
-        self.t_vars = [pulp.LpVariable(str(team), cat='Binary') for team in self.teams]   #to be used for team constraints only, not objective
-
-        #adds objective function
-        prob += (pulp.lpSum(self.players.loc[p_id, 'ppg_projection']*self.p_vars[p_id] for p_id in self.players['player_id']))
         
-        #add player number constraints
-        prob += (pulp.lpSum(self.p_vars[p_id] for p_id in self.players['player_id']) == 9)
+            self.lineups_created = 0
+            self.filter_players()
+            prob = pulp.LpProblem('Opti', pulp.LpMaximize)
 
-        #add position constraints
-        prob += (pulp.lpSum(self.positions.loc[p_id,'C-1B']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
-        prob += (pulp.lpSum(self.positions.loc[p_id,'C-1B']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
-        prob += (pulp.lpSum(self.positions.loc[p_id,'2B']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
-        prob += (pulp.lpSum(self.positions.loc[p_id,'2B']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
-        prob += (pulp.lpSum(self.positions.loc[p_id,'3B']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
-        prob += (pulp.lpSum(self.positions.loc[p_id,'3B']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
-        prob += (pulp.lpSum(self.positions.loc[p_id,'SS']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
-        prob += (pulp.lpSum(self.positions.loc[p_id,'SS']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
-        prob += (pulp.lpSum(self.positions.loc[p_id,'OF']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 4)
-        prob += (pulp.lpSum(self.positions.loc[p_id,'OF']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 3)
-        prob += (pulp.lpSum(self.positions.loc[p_id,'P']*self.p_vars[p_id] for p_id in self.players['player_id']) == 1)
+            try:
+                #adds decision variables
+                self.p_vars = {player_id:pulp.LpVariable(str(player_id), cat='Binary') for player_id in self.players['player_id']}
+                self.t_vars = [pulp.LpVariable(str(team), cat='Binary') for team in self.teams]   #to be used for team constraints only, not objective
 
-        for team in self.teams.columns.values:
-            #adds number of players per team constraint
-            prob += (pulp.lpSum(self.teams.loc[p_id,team]*self.p_vars[p_id] for p_id in self.players['player_id']) <= 4)
-            
-            #contrains team variable to be 0 when no players from a team are added, 1 otherwise
-            prob += (pulp.lpSum(self.teams.loc[p_id,team]*self.p_vars[p_id] for p_id in self.players['player_id']) >= 
-                    self.t_vars[list(self.teams).index(team)])
+                #adds objective function
+                prob += (pulp.lpSum(self.players.loc[p_id, 'ppg_projection']*self.p_vars[p_id] for p_id in self.players['player_id']))
+                
+                #add player number constraints
+                prob += (pulp.lpSum(self.p_vars[p_id] for p_id in self.players['player_id']) == 9)
 
-        #adds number of total teams constraint
-        prob += (pulp.lpSum(team for team in self.t_vars) >= 3)
+                #add position constraints
+                prob += (pulp.lpSum(self.positions.loc[p_id,'C-1B']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
+                prob += (pulp.lpSum(self.positions.loc[p_id,'C-1B']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
+                prob += (pulp.lpSum(self.positions.loc[p_id,'2B']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
+                prob += (pulp.lpSum(self.positions.loc[p_id,'2B']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
+                prob += (pulp.lpSum(self.positions.loc[p_id,'3B']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
+                prob += (pulp.lpSum(self.positions.loc[p_id,'3B']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
+                prob += (pulp.lpSum(self.positions.loc[p_id,'SS']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 2)
+                prob += (pulp.lpSum(self.positions.loc[p_id,'SS']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 1)
+                prob += (pulp.lpSum(self.positions.loc[p_id,'OF']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 4)
+                prob += (pulp.lpSum(self.positions.loc[p_id,'OF']*self.p_vars[p_id] for p_id in self.players['player_id']) >= 3)
+                prob += (pulp.lpSum(self.positions.loc[p_id,'P']*self.p_vars[p_id] for p_id in self.players['player_id']) == 1)
 
-        #adds constraint where no batters can face pitcher
-        for pitcher in self.opp_batters.columns.values:
-            prob += (6*self.p_vars[pitcher] +
-                pulp.lpSum(self.opp_batters.loc[p_id,pitcher]*self.p_vars[p_id] for p_id in self.players['player_id']) <= 6)
+                for team in self.teams.columns.values:
+                    #adds number of players per team constraint
+                    prob += (pulp.lpSum(self.teams.loc[p_id,team]*self.p_vars[p_id] for p_id in self.players['player_id']) <= 4)
+                    
+                    #contrains team variable to be 0 when no players from a team are added, 1 otherwise
+                    prob += (pulp.lpSum(self.teams.loc[p_id,team]*self.p_vars[p_id] for p_id in self.players['player_id']) >= 
+                            self.t_vars[list(self.teams).index(team)])
 
-        #adds locked players constraints
-        for player in self.lock_players:
-            prob += (self.p_vars[player] == 1)
+                #adds number of total teams constraint
+                prob += (pulp.lpSum(team for team in self.t_vars) >= 3)
 
-        #add salary constraint
-        prob += (pulp.lpSum(self.players.loc[p_id, 'salary']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 35000)
+                #adds constraint where no batters can face pitcher
+                for pitcher in self.opp_batters.columns.values:
+                    prob += (6*self.p_vars[pitcher] +
+                        pulp.lpSum(self.opp_batters.loc[p_id,pitcher]*self.p_vars[p_id] for p_id in self.players['player_id']) <= 6)
 
-        #creates list with optimal solutions
-        self.lineups = self.load_lineups(prob)
+                #adds locked players constraints
+                for player in self.lock_players:
+                    prob += (self.p_vars[player] == 1)
 
-        #sets dataframe with percentage of lineups a player is in
-        self.percentages = self.set_percentages()
+                #add salary constraint
+                prob += (pulp.lpSum(self.players.loc[p_id, 'salary']*self.p_vars[p_id] for p_id in self.players['player_id']) <= 35000)
+
+                #creates list with optimal solutions
+                self.lineups = self.load_lineups(prob)
+
+                #sets dataframe with percentage of lineups a player is in
+                self.percentages = self.set_percentages()
+        
+            except:
+                self.lineups = {}
+                self.percentages = None
 
     #solves programming problems 
     def load_lineups(self, prob):

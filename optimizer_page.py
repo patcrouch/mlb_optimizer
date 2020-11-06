@@ -110,8 +110,8 @@ class OptimizerPage(tk.Frame):
         self.percentages.delete(1.0, tk.END)
 
         #runs optimizer, converts to string, puts in text box
-        try:
-            self.optimizer.optimize()
+        self.optimizer.optimize()
+        if bool(self.optimizer.lineups):
             for i, lineup in enumerate(self.optimizer.lineups.values()):
                 df_string = lineup['players'].to_string(index=False, header=False)
                 self.lineup_list.insert(tk.END,
@@ -120,16 +120,19 @@ class OptimizerPage(tk.Frame):
                     df_string + '\n\n'+
                     'Points: '+str(lineup['points'])+'    '+'Salary: '+str(lineup['salary'])+'\n'+
                     '='*self.lineup_list_set['set']['width'] + '\n')
-        except:
+        else:        
             self.lineup_list.insert(tk.END,
                 'Constraints do not allow for creation of lineups.'+'\n'+
-                'To get optimal lineups, ensure locked and excluded players are valid.'
-            )
+                'To get optimal lineups, ensure locked and excluded'+'\n'+
+                'players are valid.'
+        )
 
         #updates percentages for each player
-        if not self.optimizer.percentages.empty:
+        try:                
             p_string = self.optimizer.percentages.to_string(index=False, header=False)
             self.percentages.insert(tk.END, p_string)
+        except:
+            pass
 
         self.lineup_list.config(state=tk.DISABLED)
         self.percentages.config(state=tk.DISABLED)
